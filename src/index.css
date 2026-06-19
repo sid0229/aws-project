@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  * {
+    border-color: theme('colors.border.DEFAULT');
+  }
+  h1, h2, h3, h4 {
+    @apply font-display;
+    color: theme('colors.navy.800');
+  }
+  ::selection {
+    background: #FFE88A;
+    color: #0B1F3A;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-card border border-border rounded-2xl shadow-soft;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-navy-300 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-navy {
+    @apply btn bg-navy-800 text-white hover:bg-navy-700 hover:shadow-lift px-4 py-2.5 text-sm;
+  }
+  .btn-yellow {
+    @apply btn bg-yellow-pastel text-navy-800 hover:bg-yellow-light hover:shadow-lift px-4 py-2.5 text-sm font-semibold;
+  }
+  .btn-outline {
+    @apply btn border border-border bg-white text-ink hover:bg-navy-50 hover:border-navy-200 px-4 py-2.5 text-sm;
+  }
+  .btn-ghost {
+    @apply btn text-ink-muted hover:bg-navy-50 hover:text-navy-800 px-3 py-2 text-sm;
+  }
+  .input {
+    @apply w-full rounded-xl border border-border bg-white px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-muted/60 focus:outline-none focus:ring-2 focus:ring-navy-200 focus:border-navy-300 transition;
+  }
+  .label {
+    @apply block text-sm font-medium text-ink mb-1.5;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+  .sidebar-link {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-ink-muted transition-all hover:bg-navy-50 hover:text-navy-800;
+  }
+  .sidebar-link-active {
+    @apply bg-navy-800 text-white hover:bg-navy-800 hover:text-white shadow-navy;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 999px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+}
+
+/* Page transition */
+.page-enter { animation: fade-in 0.35s ease-out both; }
