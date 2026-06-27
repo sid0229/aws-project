@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { Avatar } from '../ui/primitives';
-import { Logo } from '../public/layout';
+import Logo from '../shared/Logo';
+import ThemeToggle from '../shared/ThemeToggle';
 
 export type NavKey =
   | 'dashboard'
@@ -84,20 +85,20 @@ export function DashboardShell({
   const nav = navFor(user!.role);
 
   const SidebarBody = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-5 py-5">
-        <Logo />
-        <button onClick={() => setMobileOpen(false)} className="rounded-lg p-1.5 text-ink-muted hover:bg-navy-50 lg:hidden">
+    <div className="flex h-full flex-col bg-white dark:bg-slate-950">
+      <div className="flex items-center justify-between px-5 py-5 border-b border-border dark:border-slate-900">
+        <Logo variant="full" size="sm" />
+        <button onClick={() => setMobileOpen(false)} className="rounded-lg p-1.5 text-ink-muted hover:bg-navy-50 dark:hover:bg-slate-800 lg:hidden">
           <X className="h-5 w-5" />
         </button>
       </div>
-      <div className="mx-3 mb-3 rounded-xl bg-navy-50 px-3 py-2.5">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">Signed in as</p>
+      <div className="mx-3 my-3 rounded-xl bg-navy-50 px-3 py-2.5 dark:bg-slate-900">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted dark:text-slate-500">Signed in as</p>
         <div className="mt-1 flex items-center gap-2">
           <Avatar name={user!.name} color={user!.avatarColor} size="sm" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-navy-800">{user!.name}</p>
-            <p className="truncate text-xs capitalize text-ink-muted">{user!.role}</p>
+            <p className="truncate text-sm font-semibold text-navy-800 dark:text-slate-200">{user!.name}</p>
+            <p className="truncate text-xs capitalize text-ink-muted dark:text-slate-400">{user!.role}</p>
           </div>
         </div>
       </div>
@@ -131,15 +132,15 @@ export function DashboardShell({
   return (
     <div className="min-h-screen bg-bg">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-border bg-white lg:block">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-border bg-white lg:block dark:border-slate-800 dark:bg-slate-950">
         {SidebarBody}
       </aside>
 
       {/* Mobile sidebar */}
       {mobileOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="animate-fade-in-fast absolute inset-0 bg-navy-900/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <aside className="animate-slide-up absolute inset-y-0 left-0 w-64 bg-white shadow-lift">
+          <div className="animate-fade-in-fast absolute inset-0 bg-navy-900/50 backdrop-blur-sm dark:bg-black/60" onClick={() => setMobileOpen(false)} />
+          <aside className="animate-slide-up absolute inset-y-0 left-0 w-64 bg-white dark:bg-slate-950 shadow-lift">
             {SidebarBody}
           </aside>
         </div>
@@ -147,31 +148,32 @@ export function DashboardShell({
 
       <div className="lg:pl-64">
         {/* Topbar */}
-        <header className="sticky top-0 z-20 border-b border-border bg-white/80 backdrop-blur-md">
+        <header className="sticky top-0 z-20 border-b border-border bg-white/80 backdrop-blur-md dark:border-slate-800/80 dark:bg-slate-950/80">
           <div className="flex items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setMobileOpen(true)}
-                className="rounded-lg p-2 text-navy-800 hover:bg-navy-50 lg:hidden"
+                className="rounded-lg p-2 text-navy-800 hover:bg-navy-50 dark:text-slate-100 dark:hover:bg-slate-800 lg:hidden"
                 aria-label="Open menu"
               >
                 <Menu className="h-5 w-5" />
               </button>
               <div>
-                <h1 className="font-display text-lg font-bold text-navy-800 sm:text-xl">{title}</h1>
-                {subtitle && <p className="hidden text-xs text-ink-muted sm:block">{subtitle}</p>}
+                <h1 className="font-display text-lg font-bold text-navy-800 dark:text-slate-100 sm:text-xl">{title}</h1>
+                {subtitle && <p className="hidden text-xs text-ink-muted dark:text-slate-400 sm:block">{subtitle}</p>}
               </div>
             </div>
             <div className="flex items-center gap-2">
               {actions}
               <div className="relative hidden md:block">
-                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
+                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted dark:text-slate-400" />
                 <input
                   placeholder="Search…"
-                  className="h-9 w-48 rounded-xl border border-border bg-white pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-navy-200"
+                  className="h-9 w-48 rounded-xl border border-border bg-white pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-navy-200 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-800"
                 />
               </div>
-              <button className="relative rounded-xl border border-border bg-white p-2 text-ink-muted transition hover:bg-navy-50 hover:text-navy-800">
+              <ThemeToggle />
+              <button className="relative rounded-xl border border-border bg-white p-2 text-ink-muted transition hover:bg-navy-50 hover:text-navy-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
                 <Bell className="h-[18px] w-[18px]" />
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-danger ring-2 ring-white" />
               </button>

@@ -1,13 +1,4 @@
-import { useMemo, useState } from 'react';
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip as RTooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { useMemo, useState, useEffect } from 'react';
 import {
   CalendarClock,
   FolderOpen,
@@ -24,30 +15,32 @@ import {
   Download,
   BookOpen,
   Clock,
+  Trash2,
+  Edit,
 } from 'lucide-react';
-import { demoData } from '../../lib/demo-data';
-import { Avatar, Badge, Card, Progress } from '../ui/primitives';
+import {
+  studentService,
+  classService,
+  attendanceService,
+  resourceService,
+  announcementService,
+  marksService,
+} from '../../lib/services';
+import { Avatar, Badge, Card, ProgressBar } from '../ui/widgets';
 import { StatCard, SectionHeader, TableContainer, Th, Td, Pagination } from './widgets';
 import { useToast } from '../ui/toast';
-
-function ChartTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-xl border border-border bg-white px-3 py-2 shadow-lift">
-      {label && <p className="text-xs font-semibold text-navy-800">{label}</p>}
-      {payload.map((p: any, i: number) => (
-        <p key={i} className="text-xs text-ink-muted">
-          <span className="inline-block h-2 w-2 rounded-full mr-1.5 align-middle" style={{ background: p.color || p.fill }} />
-          {p.name}: <span className="font-semibold text-ink">{p.value}</span>
-        </p>
-      ))}
-    </div>
-  );
-}
+import { ConfirmDialog } from '../ui/confirm-dialog';
+import { FileUploadDropzone } from '../ui/file-upload-dropzone';
+import { AttendanceTrendChart } from '../charts/reusable-charts';
+import { demoData } from '../../lib/demo-data';
+import type { AttendanceRecord, Resource, Announcement, Exam, ExamType } from '../../types';
 
 // -------- Teacher Overview --------
 export function TeacherOverview() {
-  const { teacherSchedule, classes, resources, announcements, attendanceTrend } = demoData;
+  const { teacherSchedule } = demoData;
+  const resources = resourceService.getAll();
+  const announcements = announcementService.getAll();
+  const attendanceTrend = demoData.attendanceTrend;
   const avgAtt = Math.round(attendanceTrend.reduce((a, b) => a + b.attendance, 0) / attendanceTrend.length);
 
   return (
@@ -97,30 +90,14 @@ export function TeacherOverview() {
 
         <Card className="p-5">
           <SectionHeader title="Attendance Trend" description="Class average" />
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={attendanceTrend}>
-                <defs>
-                  <linearGradient id="tGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#0B1F3A" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#0B1F3A" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                <XAxis dataKey="week" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748B' }} />
-                <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748B' }} />
-                <RTooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="attendance" stroke="#0B1F3A" strokeWidth={2.5} fill="url(#tGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <AttendanceTrendChart data={attendanceTrend} />
         </Card>
       </div>
 
       <Card className="p-5">
         <SectionHeader title="Your Classes" description="Assigned classes this semester" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {classes.slice(0, 3).map((c) => (
+          {classService.getAll().slice(0, 3).map((c) => (
             <div key={c.id} className="rounded-xl border border-border p-4 transition hover:border-navy-200 hover:shadow-soft">
               <div className="flex items-center justify-between">
                 <Badge variant="navy">{c.grade}</Badge>
@@ -138,38 +115,95 @@ export function TeacherOverview() {
 
 // -------- Attendance Management --------
 export function TeacherAttendance() {
-  const { students } = demoData;
   const { toast } = useToast();
-  const [classFilter, setClassFilter] = useState('CSE - 3rd Year A');
-  const [subject, setSubject] = useState('Data Structures & Algorithms');
+  const classesList = classService.getAll();
+  const subjectsList = demoData.subjects;
+
+  const [selectedClassId, setSelectedClassId] = useState(classesList[0]?.id || '');
+  const [subject, setSubject] = useState(subjectsList[0]?.name || '');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 8;
 
-  const roster = useMemo(() => students.slice(0, 22).map((s) => ({ ...s, present: true })), []);
-  const [presentMap, setPresentMap] = useState<Record<string, boolean>>(
-    Object.fromEntries(roster.map((s) => [s.id, true]))
-  );
+  // Active roster of students for the selected class
+  const classStudents = useMemo(() => {
+    return studentService.getAll().filter((s) => s.classId === selectedClassId);
+  }, [selectedClassId]);
 
-  const filtered = roster.filter(
-    (s) => s.name.toLowerCase().includes(search.toLowerCase()) || s.rollNo.toLowerCase().includes(search.toLowerCase())
-  );
+  const [presentMap, setPresentMap] = useState<Record<string, boolean>>({});
+  const [existingRecord, setExistingRecord] = useState<AttendanceRecord | null>(null);
+
+  // Sync present map with DB or set default (all present)
+  useEffect(() => {
+    const record = attendanceService.getByClassAndDate(selectedClassId, subject, date);
+    setExistingRecord(record || null);
+    if (record) {
+      const nextMap: Record<string, boolean> = {};
+      classStudents.forEach((s) => {
+        nextMap[s.id] = record.presentStudentIds.includes(s.id);
+      });
+      setPresentMap(nextMap);
+    } else {
+      const nextMap: Record<string, boolean> = {};
+      classStudents.forEach((s) => {
+        nextMap[s.id] = true;
+      });
+      setPresentMap(nextMap);
+    }
+  }, [selectedClassId, subject, date, classStudents]);
+
+  const filtered = useMemo(() => {
+    return classStudents.filter(
+      (s) => s.name.toLowerCase().includes(search.toLowerCase()) || s.rollNo.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [classStudents, search]);
+
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
   const totalPages = Math.ceil(filtered.length / pageSize);
   const presentCount = Object.values(presentMap).filter(Boolean).length;
+  const attendanceRate = classStudents.length ? Math.round((presentCount / classStudents.length) * 100) : 0;
 
   const toggleAll = (val: boolean) => {
+    if (existingRecord?.submitted) return;
     const next: Record<string, boolean> = {};
-    filtered.forEach((s) => (next[s.id] = val));
+    classStudents.forEach((s) => (next[s.id] = val));
     setPresentMap((prev) => ({ ...prev, ...next }));
   };
 
-  const submit = () => {
+  const handleSave = (submitted: boolean) => {
+    if (existingRecord?.submitted) {
+      toast({
+        type: 'warning',
+        title: 'Already submitted',
+        description: 'This attendance sheet has already been finalized and cannot be overwritten.',
+      });
+      return;
+    }
+
+    const presentStudentIds = Object.entries(presentMap)
+      .filter(([_, present]) => present)
+      .map(([id]) => id);
+
+    const cls = classesList.find((c) => c.id === selectedClassId);
+
+    const record: AttendanceRecord = {
+      id: existingRecord?.id || `att_${Date.now()}`,
+      classId: selectedClassId,
+      className: cls?.name || 'Class',
+      subject,
+      date,
+      presentStudentIds,
+      totalStudents: classStudents.length,
+      submitted,
+    };
+
+    attendanceService.submit(record);
+    setExistingRecord(record);
     toast({
-      type: 'success',
-      title: 'Attendance submitted',
-      description: `${presentCount}/${roster.length} marked present for ${subject}.`,
+      type: submitted ? 'success' : 'info',
+      title: submitted ? 'Attendance Submitted' : 'Draft Saved',
+      description: `${presentCount}/${classStudents.length} present for ${subject}.`,
     });
   };
 
@@ -179,32 +213,58 @@ export function TeacherAttendance() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label className="label">Class</label>
-            <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="input">
-              {['CSE - 3rd Year A', 'CSE - 3rd Year B', 'IT - 3rd Year'].map((c) => (
-                <option key={c}>{c}</option>
+            <select
+              value={selectedClassId}
+              onChange={(e) => setSelectedClassId(e.target.value)}
+              className="input"
+              disabled={existingRecord?.submitted}
+            >
+              {classesList.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </div>
           <div>
             <label className="label">Subject</label>
-            <select value={subject} onChange={(e) => setSubject(e.target.value)} className="input">
-              {demoData.subjects.map((s) => (
-                <option key={s.code}>{s.name}</option>
+            <select
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="input"
+              disabled={existingRecord?.submitted}
+            >
+              {subjectsList.map((s) => (
+                <option key={s.code} value={s.name}>{s.name}</option>
               ))}
             </select>
           </div>
           <div>
             <label className="label">Date</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="input"
+              disabled={existingRecord?.submitted}
+            />
           </div>
-          <div className="flex items-end">
-            <div className="w-full rounded-xl bg-navy-50 px-4 py-2.5">
+          <div className="flex gap-2 items-end">
+            <div className="w-1/2 rounded-xl bg-navy-50 px-4 py-2.5">
               <p className="text-xs text-ink-muted">Present</p>
-              <p className="font-display text-xl font-bold text-navy-800">{presentCount}<span className="text-sm text-ink-muted">/{roster.length}</span></p>
+              <p className="font-display text-lg font-bold text-navy-800">{presentCount}<span className="text-xs text-ink-muted">/{classStudents.length}</span></p>
+            </div>
+            <div className="w-1/2 rounded-xl bg-navy-50 px-4 py-2.5">
+              <p className="text-xs text-ink-muted">Percentage</p>
+              <p className="font-display text-lg font-bold text-navy-800">{attendanceRate}%</p>
             </div>
           </div>
         </div>
       </Card>
+
+      {existingRecord?.submitted && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-emerald-800 text-sm">
+          Attendance has been submitted and finalized for this class/subject/date.
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
@@ -220,14 +280,16 @@ export function TeacherAttendance() {
               className="input pl-9"
             />
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => toggleAll(true)} className="btn-outline">
-              <CheckCheck className="h-4 w-4" /> Mark all present
-            </button>
-            <button onClick={() => toggleAll(false)} className="btn-ghost">
-              <X className="h-4 w-4" /> Mark all absent
-            </button>
-          </div>
+          {!existingRecord?.submitted && (
+            <div className="flex gap-2">
+              <button onClick={() => toggleAll(true)} className="btn-outline">
+                <CheckCheck className="h-4 w-4" /> Mark all present
+              </button>
+              <button onClick={() => toggleAll(false)} className="btn-ghost">
+                <X className="h-4 w-4" /> Mark all absent
+              </button>
+            </div>
+          )}
         </div>
         <TableContainer>
           <thead>
@@ -239,41 +301,51 @@ export function TeacherAttendance() {
             </tr>
           </thead>
           <tbody>
-            {paged.map((s) => {
-              const present = presentMap[s.id];
-              return (
-                <tr key={s.id} className="transition hover:bg-navy-50/40">
-                  <Td>
-                    <div className="flex items-center gap-3">
-                      <Avatar name={s.name} color={s.avatarColor} size="sm" />
-                      <div>
-                        <p className="font-medium text-ink">{s.name}</p>
-                        <p className="text-xs text-ink-muted">{s.email}</p>
+            {paged.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-8 text-center text-ink-muted text-sm">No students found.</td>
+              </tr>
+            ) : (
+              paged.map((s) => {
+                const present = presentMap[s.id] ?? false;
+                return (
+                  <tr key={s.id} className="transition hover:bg-navy-50/40">
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        <Avatar name={s.name} color={s.avatarColor} size="sm" />
+                        <div>
+                          <p className="font-medium text-ink">{s.name}</p>
+                          <p className="text-xs text-ink-muted">{s.email}</p>
+                        </div>
                       </div>
-                    </div>
-                  </Td>
-                  <Td><Badge variant="gray">{s.rollNo}</Badge></Td>
-                  <Td>
-                    <Badge variant={present ? 'success' : 'danger'}>
-                      {present ? 'Present' : 'Absent'}
-                    </Badge>
-                  </Td>
-                  <Td>
-                    <button
-                      onClick={() => setPresentMap((prev) => ({ ...prev, [s.id]: !prev[s.id] }))}
-                      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                        present
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                      }`}
-                    >
-                      <span className={`h-4 w-4 rounded ${present ? 'bg-emerald-500' : 'bg-rose-400'}`} />
-                      Toggle
-                    </button>
-                  </Td>
-                </tr>
-              );
-            })}
+                    </Td>
+                    <Td><Badge variant="gray">{s.rollNo}</Badge></Td>
+                    <Td>
+                      <Badge variant={present ? 'success' : 'danger'}>
+                        {present ? 'Present' : 'Absent'}
+                      </Badge>
+                    </Td>
+                    <Td>
+                      <button
+                        onClick={() => {
+                          if (existingRecord?.submitted) return;
+                          setPresentMap((prev) => ({ ...prev, [s.id]: !prev[s.id] }));
+                        }}
+                        disabled={existingRecord?.submitted}
+                        className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                          present
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                        } disabled:opacity-50`}
+                      >
+                        <span className={`h-4 w-4 rounded ${present ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+                        Toggle
+                      </button>
+                    </Td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </TableContainer>
         <div className="px-4">
@@ -281,77 +353,102 @@ export function TeacherAttendance() {
         </div>
       </Card>
 
-      <div className="flex justify-end gap-2">
-        <button onClick={() => toast({ type: 'info', title: 'Saved as draft' })} className="btn-outline">
-          <Save className="h-4 w-4" /> Save Draft
-        </button>
-        <button onClick={submit} className="btn-navy">
-          <Send className="h-4 w-4" /> Submit Attendance
-        </button>
-      </div>
+      {!existingRecord?.submitted && (
+        <div className="flex justify-end gap-2">
+          <button onClick={() => handleSave(false)} className="btn-outline">
+            <Save className="h-4 w-4" /> Save Draft
+          </button>
+          <button onClick={() => handleSave(true)} className="btn-navy">
+            <Send className="h-4 w-4" /> Submit Attendance
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 // -------- Resources (Upload) --------
 export function TeacherResources() {
-  const { resources } = demoData;
   const { toast } = useToast();
-  const [dragOver, setDragOver] = useState(false);
-  const [uploaded, setUploaded] = useState<typeof resources>([]);
+  const [resources, setResources] = useState<Resource[]>([]);
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState(demoData.subjects[0].name);
   const [desc, setDesc] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileSizeStr, setFileSizeStr] = useState('');
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [resourceToDelete, setResourceToDelete] = useState<string | null>(null);
+
+  // Sync files list
+  const loadResources = () => {
+    setResources(resourceService.getAll());
+  };
+
+  useEffect(() => {
+    loadResources();
+  }, []);
+
+  const handleFileSelect = (file: File, sizeStr: string) => {
+    setSelectedFile(file);
+    setFileSizeStr(sizeStr);
+  };
 
   const publish = () => {
-    if (!title) {
+    if (!title.trim()) {
       toast({ type: 'warning', title: 'Title required', description: 'Give your resource a title.' });
       return;
     }
-    const newR = {
-      id: `r${Date.now()}`,
+    if (!selectedFile) {
+      toast({ type: 'warning', title: 'File required', description: 'Please pick a file to upload first.' });
+      return;
+    }
+
+    const newR: Resource = {
+      id: `r_${Date.now()}`,
       title,
       subject,
       uploadedBy: 'Dr. Anil Sharma',
       uploadedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      size: '2.1 MB',
+      size: fileSizeStr,
       downloads: 0,
       className: 'CSE - 3rd Year A',
+      description: desc,
     };
-    setUploaded((p) => [newR, ...p]);
+
+    resourceService.save(newR);
     setTitle('');
     setDesc('');
+    setSelectedFile(null);
+    loadResources();
     toast({ type: 'success', title: 'Resource uploaded', description: `"${newR.title}" is now available to students.` });
+  };
+
+  const downloadSim = (id: string, titleStr: string) => {
+    resourceService.incrementDownloads(id);
+    loadResources();
+    toast({ type: 'success', title: 'Download Started', description: `Simulated download of "${titleStr}" complete.` });
+  };
+
+  const confirmDelete = (id: string) => {
+    setResourceToDelete(id);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleDelete = () => {
+    if (resourceToDelete) {
+      resourceService.delete(resourceToDelete);
+      loadResources();
+      setDeleteConfirmOpen(false);
+      setResourceToDelete(null);
+      toast({ type: 'info', title: 'Deleted', description: 'Resource removed successfully.' });
+    }
   };
 
   return (
     <div className="space-y-6">
       <Card className="p-5 sm:p-6">
         <SectionHeader title="Upload Resource" description="Share PDFs, notes, and slides with your students" />
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            toast({ type: 'info', title: 'File added', description: 'Ready to publish.' });
-          }}
-          className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition ${
-            dragOver ? 'border-navy-500 bg-navy-50' : 'border-border bg-navy-50/30'
-          }`}
-        >
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-yellow-light">
-            <UploadCloud className="h-7 w-7 text-navy-800" />
-          </div>
-          <p className="mt-3 text-sm font-semibold text-navy-800">Drag & drop your PDF here</p>
-          <p className="mt-1 text-xs text-ink-muted">or click to browse · Max 50 MB</p>
-          <button onClick={() => toast({ type: 'info', title: 'File picker', description: 'Demo: file selection disabled.' })} className="btn-outline mt-4">
-            <FileText className="h-4 w-4" /> Choose PDF
-          </button>
-        </div>
+        <FileUploadDropzone onFileSelect={handleFileSelect} />
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div>
@@ -362,7 +459,7 @@ export function TeacherResources() {
             <label className="label">Subject</label>
             <select value={subject} onChange={(e) => setSubject(e.target.value)} className="input">
               {demoData.subjects.map((s) => (
-                <option key={s.code}>{s.name}</option>
+                <option key={s.code} value={s.name}>{s.name}</option>
               ))}
             </select>
           </div>
@@ -379,61 +476,108 @@ export function TeacherResources() {
       </Card>
 
       <div>
-        <SectionHeader title="Your Uploaded Resources" description={`${[...uploaded, ...resources].length} resources shared`} />
+        <SectionHeader title="Your Uploaded Resources" description={`${resources.length} resources shared`} />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[...uploaded, ...resources].map((r) => (
+          {resources.map((r) => (
             <Card key={r.id} hover className="flex flex-col p-4">
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-rose-50">
-                  <FileText className="h-5 w-5 text-rose-500" />
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-rose-50">
+                    <FileText className="h-5 w-5 text-rose-500" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-semibold uppercase text-rose-500">PDF / Document</p>
+                    <h3 className="mt-0.5 leading-tight font-semibold text-navy-800 truncate">{r.title}</h3>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase text-rose-500">PDF</p>
-                  <h3 className="mt-0.5 leading-tight font-semibold text-navy-800">{r.title}</h3>
-                </div>
+                <button onClick={() => confirmDelete(r.id)} className="text-ink-muted hover:text-danger p-1">
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
               <div className="mt-3 space-y-1 text-xs text-ink-muted">
                 <p className="flex items-center gap-1.5"><BookOpen className="h-3 w-3" /> {r.subject}</p>
                 <p>{r.uploadedDate} · {r.size}</p>
                 <p>{r.downloads} downloads</p>
               </div>
-              <button className="btn-outline mt-3 w-full">
+              <button onClick={() => downloadSim(r.id, r.title)} className="btn-outline mt-3 w-full">
                 <Download className="h-4 w-4" /> Download
               </button>
             </Card>
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        onConfirm={handleDelete}
+        title="Delete Resource?"
+        description="Are you sure you want to delete this resource? It will be removed permanently."
+      />
     </div>
   );
 }
 
 // -------- Announcements (Create) --------
 export function TeacherAnnouncements() {
-  const { announcements } = demoData;
   const { toast } = useToast();
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
-  const [list, setList] = useState(announcements);
+  const [category, setCategory] = useState<'general' | 'exam' | 'event' | 'urgent'>('general');
+  const [status, setStatus] = useState<'draft' | 'published'>('published');
+  const [list, setList] = useState<Announcement[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const loadAnnouncements = () => {
+    setList(announcementService.getAll());
+  };
+
+  useEffect(() => {
+    loadAnnouncements();
+  }, []);
 
   const publish = () => {
-    if (!title || !message) {
+    if (!title.trim() || !message.trim()) {
       toast({ type: 'warning', title: 'Fill all fields', description: 'Title and message are required.' });
       return;
     }
-    const newA = {
-      id: `a${Date.now()}`,
+    const newA: Announcement = {
+      id: editingId || `ann_${Date.now()}`,
       title,
       message,
-      date: 'Just now',
+      date: new Date().toLocaleDateString('en-US', { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }),
       teacher: 'Dr. Anil Sharma',
-      category: 'general' as const,
+      category,
       read: false,
+      status,
+      audience: 'all',
     };
-    setList((p) => [newA, ...p]);
+    announcementService.save(newA);
     setTitle('');
     setMessage('');
-    toast({ type: 'success', title: 'Announcement published', description: 'Students have been notified.' });
+    setCategory('general');
+    setEditingId(null);
+    loadAnnouncements();
+    toast({
+      type: 'success',
+      title: editingId ? 'Announcement updated' : 'Announcement saved',
+      description: status === 'published' ? 'Students have been notified.' : 'Saved to drafts.',
+    });
+  };
+
+  const handleEdit = (ann: Announcement) => {
+    setEditingId(ann.id);
+    setTitle(ann.title);
+    setMessage(ann.message);
+    setCategory(ann.category);
+    setStatus(ann.status);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDelete = (id: string) => {
+    announcementService.delete(id);
+    loadAnnouncements();
+    toast({ type: 'info', title: 'Deleted', description: 'Announcement removed.' });
   };
 
   const previewEnabled = title || message;
@@ -441,20 +585,50 @@ export function TeacherAnnouncements() {
   return (
     <div className="grid gap-6 lg:grid-cols-5">
       <Card className="p-5 lg:col-span-3">
-        <SectionHeader title="Create Announcement" description="Notify your students instantly" />
+        <SectionHeader title={editingId ? 'Edit Announcement' : 'Create Announcement'} description="Notify your students instantly" />
         <div className="space-y-4">
           <div>
             <label className="label">Title</label>
             <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Assignment 4 deadline extended" className="input" />
           </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Category</label>
+              <select value={category} onChange={(e: any) => setCategory(e.target.value)} className="input">
+                <option value="general">General</option>
+                <option value="exam">Exam</option>
+                <option value="event">Event</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Publish Status</label>
+              <select value={status} onChange={(e: any) => setStatus(e.target.value)} className="input">
+                <option value="published">Published</option>
+                <option value="draft">Draft Only</option>
+              </select>
+            </div>
+          </div>
           <div>
             <label className="label">Message</label>
-            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={6} placeholder="Write your announcement…" className="input resize-none" />
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={5} placeholder="Write your announcement…" className="input resize-none" />
           </div>
           <div className="flex justify-end gap-2">
-            <button onClick={() => { setTitle(''); setMessage(''); }} className="btn-ghost">Clear</button>
+            {editingId && (
+              <button
+                onClick={() => {
+                  setEditingId(null);
+                  setTitle('');
+                  setMessage('');
+                  setCategory('general');
+                }}
+                className="btn-ghost"
+              >
+                Cancel Edit
+              </button>
+            )}
             <button onClick={publish} className="btn-navy">
-              <Send className="h-4 w-4" /> Publish
+              <Send className="h-4 w-4" /> Save
             </button>
           </div>
         </div>
@@ -465,7 +639,7 @@ export function TeacherAnnouncements() {
               <Eye className="h-3.5 w-3.5" /> Preview
             </div>
             <div className="rounded-xl border border-border bg-white p-4">
-              <Badge variant="navy">general</Badge>
+              <Badge variant={category === 'urgent' ? 'danger' : category === 'exam' ? 'warning' : 'navy'}>{category}</Badge>
               <h3 className="mt-2 font-bold text-navy-800">{title || 'Your title appears here'}</h3>
               <p className="mt-1.5 text-sm text-ink-muted">{message || 'Your message body will appear here.'}</p>
               <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
@@ -479,16 +653,29 @@ export function TeacherAnnouncements() {
       </Card>
 
       <Card className="p-5 lg:col-span-2">
-        <SectionHeader title="Recent" description={`${list.length} announcements`} />
+        <SectionHeader title="Recent Announcements" description={`${list.length} announcements`} />
         <div className="max-h-[600px] space-y-3 overflow-y-auto scrollbar-thin pr-1">
           {list.map((a) => (
-            <div key={a.id} className="rounded-xl border border-border p-3">
+            <div key={a.id} className="rounded-xl border border-border p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Badge variant="gray">{a.category}</Badge>
-                <span className="text-[11px] text-ink-muted">{a.date}</span>
+                <div className="flex gap-1 items-center">
+                  <Badge variant={a.category === 'urgent' ? 'danger' : a.category === 'exam' ? 'warning' : 'gray'}>{a.category}</Badge>
+                  {a.status === 'draft' && <Badge variant="yellow">Draft</Badge>}
+                </div>
+                <span className="text-[10px] text-ink-muted">{a.date}</span>
               </div>
-              <p className="mt-1.5 text-sm font-semibold text-navy-800">{a.title}</p>
-              <p className="mt-1 line-clamp-2 text-xs text-ink-muted">{a.message}</p>
+              <div>
+                <p className="text-sm font-semibold text-navy-800">{a.title}</p>
+                <p className="mt-1 line-clamp-2 text-xs text-ink-muted">{a.message}</p>
+              </div>
+              <div className="flex justify-end gap-1 pt-2 border-t border-border mt-1">
+                <button onClick={() => handleEdit(a)} className="text-ink-muted hover:text-navy-800 p-1">
+                  <Edit className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => handleDelete(a.id)} className="text-ink-muted hover:text-danger p-1">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -499,31 +686,100 @@ export function TeacherAnnouncements() {
 
 // -------- Marks Upload --------
 export function TeacherMarks() {
-  const { students, subjects } = demoData;
   const { toast } = useToast();
-  const [className, setClassName] = useState('CSE - 3rd Year A');
-  const [subject, setSubject] = useState(subjects[0].name);
-  const [examType, setExamType] = useState<'internal' | 'midsem' | 'endsem'>('internal');
+  const classesList = classService.getAll();
+  const subjectsList = demoData.subjects;
+
+  const [classId, setClassId] = useState(classesList[0]?.id || '');
+  const [subject, setSubject] = useState(subjectsList[0]?.name || '');
+  const [examType, setExamType] = useState<ExamType>('internal');
   const [page, setPage] = useState(1);
   const pageSize = 8;
-  const roster = students.slice(0, 22);
-  const [marks, setMarks] = useState<Record<string, number>>(
-    Object.fromEntries(roster.map((s, i) => [s.id, Math.round(12 + (i % 9))]))
-  );
-  const max = examType === 'internal' ? 20 : examType === 'midsem' ? 30 : 50;
+
+  // Active roster of students for the selected class
+  const classStudents = useMemo(() => {
+    return studentService.getAll().filter((s) => s.classId === classId);
+  }, [classId]);
+
+  const max = examType === 'endsem' ? 50 : examType === 'midsem' ? 30 : 20;
+
+  const [marks, setMarks] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
 
-  const filtered = roster;
+  // Modal Dialog flags
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<'draft' | 'published'>('draft');
+
+  const examId = `${classId}_${subject.replace(/\s+/g, '')}_${examType}`;
+
+  // Sync marks state when class, subject or exam type changes
+  useEffect(() => {
+    const existingExam = marksService.getExamById(examId);
+    if (existingExam) {
+      setStatus(existingExam.status);
+      const nextMarks: Record<string, number> = {};
+      existingExam.entries.forEach((ent) => {
+        nextMarks[ent.studentId] = ent.marks[examType] || 0;
+      });
+      setMarks(nextMarks);
+    } else {
+      setStatus('draft');
+      const nextMarks: Record<string, number> = {};
+      classStudents.forEach((s) => {
+        nextMarks[s.id] = 0;
+      });
+      setMarks(nextMarks);
+    }
+  }, [classId, subject, examType, classStudents, examId]);
+
+  const filtered = classStudents;
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
   const totalPages = Math.ceil(filtered.length / pageSize);
 
-  const save = (kind: 'draft' | 'publish') => {
-    setStatus(kind === 'draft' ? 'draft' : 'published');
+  const triggerSave = (kind: 'draft' | 'published') => {
+    setPendingStatus(kind);
+    // If overwrite/publishing, show confirmation modal
+    if (kind === 'published' || status === 'published') {
+      setConfirmOpen(true);
+    } else {
+      executeSave(kind);
+    }
+  };
+
+  const executeSave = (kind: 'draft' | 'published') => {
+    const entries = classStudents.map((s) => ({
+      studentId: s.id,
+      studentName: s.name,
+      rollNo: s.rollNo,
+      marks: {
+        [examType]: marks[s.id] || 0,
+      },
+    }));
+
+    const examRecord: Exam = {
+      id: examId,
+      classId,
+      subject,
+      examType,
+      maxMarks: max,
+      status: kind,
+      entries,
+    };
+
+    marksService.saveExam(examRecord);
+    setStatus(kind);
+    setConfirmOpen(false);
     toast({
       type: kind === 'draft' ? 'info' : 'success',
       title: kind === 'draft' ? 'Marks saved as draft' : 'Marks published',
-      description: `${subject} · ${examType} · Class ${className}`,
+      description: `${subject} · ${examType} · Class ${classesList.find((c) => c.id === classId)?.name}`,
     });
+  };
+
+  const updateStudentMark = (studentId: string, val: string) => {
+    const num = Number(val);
+    const checkedVal = Math.min(max, Math.max(0, num));
+    setMarks((prev) => ({ ...prev, [studentId]: checkedVal }));
   };
 
   return (
@@ -532,14 +788,14 @@ export function TeacherMarks() {
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label className="label">Class</label>
-            <select value={className} onChange={(e) => setClassName(e.target.value)} className="input">
-              {['CSE - 3rd Year A', 'CSE - 3rd Year B', 'IT - 3rd Year'].map((c) => (<option key={c}>{c}</option>))}
+            <select value={classId} onChange={(e) => setClassId(e.target.value)} className="input">
+              {classesList.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
             </select>
           </div>
           <div>
             <label className="label">Subject</label>
             <select value={subject} onChange={(e) => setSubject(e.target.value)} className="input">
-              {subjects.map((s) => (<option key={s.code}>{s.name}</option>))}
+              {subjectsList.map((s) => (<option key={s.code} value={s.name}>{s.name}</option>))}
             </select>
           </div>
           <div>
@@ -548,6 +804,7 @@ export function TeacherMarks() {
               {(['internal', 'midsem', 'endsem'] as const).map((t) => (
                 <button
                   key={t}
+                  type="button"
                   onClick={() => { setExamType(t); }}
                   className={`rounded-lg border px-2 py-2 text-xs font-medium capitalize transition ${
                     examType === t ? 'border-navy-700 bg-navy-50 text-navy-800 ring-2 ring-navy-200' : 'border-border bg-white text-ink-muted hover:bg-navy-50'
@@ -566,7 +823,7 @@ export function TeacherMarks() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
           <div>
             <h2 className="font-display text-base font-bold text-navy-800">Student Marks</h2>
-            <p className="text-xs text-ink-muted">{roster.length} students · Status: <Badge variant={status === 'published' ? 'success' : 'warning'}>{status}</Badge></p>
+            <p className="text-xs text-ink-muted">{classStudents.length} students · Status: <Badge variant={status === 'published' ? 'success' : 'warning'}>{status}</Badge></p>
           </div>
         </div>
         <TableContainer>
@@ -574,47 +831,53 @@ export function TeacherMarks() {
             <tr>
               <Th>Student</Th>
               <Th>Roll No</Th>
-              <Th>Marks</Th>
+              <Th>Marks Input</Th>
               <Th>Percentage</Th>
               <Th>Grade</Th>
             </tr>
           </thead>
           <tbody>
-            {paged.map((s) => {
-              const m = marks[s.id] ?? 0;
-              const pct = Math.round((m / max) * 100);
-              const grade = pct >= 90 ? 'A+' : pct >= 80 ? 'A' : pct >= 70 ? 'B+' : pct >= 60 ? 'B' : pct >= 50 ? 'C' : 'F';
-              return (
-                <tr key={s.id} className="transition hover:bg-navy-50/40">
-                  <Td>
-                    <div className="flex items-center gap-3">
-                      <Avatar name={s.name} color={s.avatarColor} size="sm" />
-                      <p className="font-medium text-ink">{s.name}</p>
-                    </div>
-                  </Td>
-                  <Td><Badge variant="gray">{s.rollNo}</Badge></Td>
-                  <Td>
-                    <input
-                      type="number"
-                      min={0}
-                      max={max}
-                      value={m}
-                      onChange={(e) => setMarks((prev) => ({ ...prev, [s.id]: Math.min(max, Math.max(0, Number(e.target.value))) }))}
-                      className="w-20 rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-navy-200"
-                    />
-                  </Td>
-                  <Td>
-                    <div className="flex items-center gap-2">
-                      <Progress value={pct} className="w-16" />
-                      <span className="text-xs font-semibold text-ink">{pct}%</span>
-                    </div>
-                  </Td>
-                  <Td>
-                    <Badge variant={pct >= 60 ? 'success' : 'danger'}>{grade}</Badge>
-                  </Td>
-                </tr>
-              );
-            })}
+            {paged.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-8 text-center text-ink-muted text-sm">No students in this class.</td>
+              </tr>
+            ) : (
+              paged.map((s) => {
+                const m = marks[s.id] ?? 0;
+                const pct = Math.round((m / max) * 100);
+                const grade = pct >= 90 ? 'A+' : pct >= 80 ? 'A' : pct >= 70 ? 'B+' : pct >= 60 ? 'B' : pct >= 50 ? 'C' : 'F';
+                return (
+                  <tr key={s.id} className="transition hover:bg-navy-50/40">
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        <Avatar name={s.name} color={s.avatarColor} size="sm" />
+                        <p className="font-medium text-ink">{s.name}</p>
+                      </div>
+                    </Td>
+                    <Td><Badge variant="gray">{s.rollNo}</Badge></Td>
+                    <Td>
+                      <input
+                        type="number"
+                        min={0}
+                        max={max}
+                        value={m}
+                        onChange={(e) => updateStudentMark(s.id, e.target.value)}
+                        className="w-20 rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-navy-200"
+                      />
+                    </Td>
+                    <Td>
+                      <div className="flex items-center gap-2">
+                        <ProgressBar value={pct} className="w-16" />
+                        <span className="text-xs font-semibold text-ink">{pct}%</span>
+                      </div>
+                    </Td>
+                    <Td>
+                      <Badge variant={pct >= 50 ? 'success' : 'danger'}>{grade}</Badge>
+                    </Td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </TableContainer>
         <div className="px-4">
@@ -623,33 +886,48 @@ export function TeacherMarks() {
       </Card>
 
       <div className="flex justify-end gap-2">
-        <button onClick={() => save('draft')} className="btn-outline">
+        <button onClick={() => triggerSave('draft')} className="btn-outline">
           <Save className="h-4 w-4" /> Save as Draft
         </button>
-        <button onClick={() => save('publish')} className="btn-navy">
+        <button onClick={() => triggerSave('published')} className="btn-navy">
           <Send className="h-4 w-4" /> Publish Marks
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => executeSave(pendingStatus)}
+        title={pendingStatus === 'published' ? 'Publish Marks?' : 'Overwrite Published Marks?'}
+        description={
+          pendingStatus === 'published'
+            ? 'Publishing marks will make them immediately visible to students on their dashboards. Proceed?'
+            : 'These marks have already been published. Saving new edits will overwrite the existing entries. Proceed?'
+        }
+      />
     </div>
   );
 }
 
 // -------- Teacher's Students view --------
 export function TeacherStudents() {
-  const { students } = demoData;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 10;
-  const filtered = students.slice(0, 60).filter((s) => s.name.toLowerCase().includes(search.toLowerCase()) || s.rollNo.toLowerCase().includes(search.toLowerCase()));
-  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
-  const totalPages = Math.ceil(filtered.length / pageSize);
+
+  const students = useMemo(() => {
+    return studentService.getAll().filter((s) => s.name.toLowerCase().includes(search.toLowerCase()) || s.rollNo.toLowerCase().includes(search.toLowerCase()));
+  }, [search]);
+
+  const paged = students.slice((page - 1) * pageSize, page * pageSize);
+  const totalPages = Math.ceil(students.length / pageSize);
 
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
         <div>
           <h2 className="font-display text-base font-bold text-navy-800">My Students</h2>
-          <p className="text-xs text-ink-muted">{filtered.length} students across your classes</p>
+          <p className="text-xs text-ink-muted">{students.length} students enrolled</p>
         </div>
         <div className="relative max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
@@ -682,7 +960,7 @@ export function TeacherStudents() {
               <Td className="text-sm">{s.className}</Td>
               <Td>
                 <div className="flex items-center gap-2">
-                  <Progress value={s.attendancePct} className="w-16" />
+                  <ProgressBar value={s.attendancePct} className="w-16" />
                   <span className="text-xs font-semibold text-ink">{s.attendancePct}%</span>
                 </div>
               </Td>

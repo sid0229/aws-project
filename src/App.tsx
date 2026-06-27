@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AuthProvider, useAuth } from './lib/auth';
 import { ToastProvider } from './components/ui/toast';
+import { ThemeProvider } from './context/ThemeContext';
 import { LandingPage } from './components/public/landing';
 import { LoginPage, SignupPage } from './components/public/auth';
 import { DashboardShell, type NavKey } from './components/dashboard/shell';
@@ -11,7 +12,7 @@ import { AdminOverview, AdminStudents, AdminTeachers, AdminClasses, AdminReports
 type Route = 'landing' | 'login' | 'signup';
 
 function Shell() {
-  const { user, login } = useAuth();
+  const { user } = useAuth();
   const [route, setRoute] = useState<Route>('landing');
   const [nav, setNav] = useState<NavKey>('dashboard');
 
@@ -22,7 +23,7 @@ function Shell() {
   if (route === 'login') {
     return (
       <LoginPage
-        onLogin={(r) => { setNav('dashboard'); login(r); }}
+        onLogin={() => setNav('dashboard')}
         onBack={() => setRoute('landing')}
         onSignup={() => setRoute('signup')}
       />
@@ -31,7 +32,7 @@ function Shell() {
   if (route === 'signup') {
     return (
       <SignupPage
-        onSignup={(r) => { setNav('dashboard'); login(r); }}
+        onSignup={() => setNav('dashboard')}
         onBack={() => setRoute('landing')}
         onLogin={() => setRoute('login')}
       />
@@ -114,11 +115,13 @@ function RoleDashboard({ nav, setNav }: { nav: NavKey; setNav: (k: NavKey) => vo
 
 function App() {
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <Shell />
-      </ToastProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <ToastProvider>
+          <Shell />
+        </ToastProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 

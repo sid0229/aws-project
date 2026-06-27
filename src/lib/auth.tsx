@@ -1,49 +1,62 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import type { Role } from '../lib/types';
-
-interface User {
-  name: string;
-  email: string;
-  role: Role;
-  avatarColor: string;
-}
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import type { Role, User } from '../types';
+import { authService } from './services';
 
 interface AuthCtx {
   user: User | null;
-  login: (role: Role) => void;
+  loading: boolean;
+  login: (email: string, password?: string, role?: Role) => Promise<User>;
+  signup: (name: string, email: string, role: Role, password?: string) => Promise<User>;
   logout: () => void;
 }
-
-const ROLE_USERS: Record<Role, User> = {
-  student: {
-    name: 'Aarav Sharma',
-    email: 'aarav.sharma1@university.edu',
-    role: 'student',
-    avatarColor: 'bg-navy-700',
-  },
-  teacher: {
-    name: 'Dr. Anil Sharma',
-    email: 'anil.sharma@university.edu',
-    role: 'teacher',
-    avatarColor: 'bg-emerald-600',
-  },
-  admin: {
-    name: 'Dr. Priya Nair',
-    email: 'priya.nair@university.edu',
-    role: 'admin',
-    avatarColor: 'bg-blue-600',
-  },
-};
 
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const login = (role: Role) => setUser(ROLE_USERS[role]);
-  const logout = () => setUser(null);
+  useEffect(() => {
+    // Keep logged in on refresh by checking current session
+    const currentUser = authService.getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
+    }
+    setLoading(false);
+  }, []);
 
-  return <Ctx.Provider value={{ user, login, logout }}>{children}</Ctx.Provider>;
+  const login = async (email: string, password?: string, role?: Role) => {
+    setLoading(true);
+    try {
+      const u = await authService.login(email, password, role);
+      setUser(u);
+      return u;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const signup = async (name: string, email: string, role: Role, password?: string) => {
+    setLoading(true);
+    try {
+      const u = await authService.signup(name, email, role, password);
+      setUser(u);
+      return u;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = () => {
+    authService.logout();
+    setUser(null);
+  };
+
+  return (
+    <Ctx.Provider value={{ user, loading, login, signup, logout }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth() {
